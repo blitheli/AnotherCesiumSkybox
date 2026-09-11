@@ -2,13 +2,11 @@
  * NASA Eyes 风格星空：用 Cesium.BillboardCollection 绘制恒星/星系，
  * 取代默认 SkyBox 立方体贴图。
  *
- * 本演示刻意选用 BillboardCollection（而非 PointPrimitiveCollection / 默认 SkyBox）：
- * - SkyBox：六面立方体贴图，固定在 TEME，无法按星表逐星着色/缩放。
- * - PointPrimitive：性能好，但仅为 gl_Point，缺少纹理光晕与更柔和的“眼睛”观感。
- * - BillboardCollection：共享纹理图集的视口对齐精灵，易做出柔和星点与星系光斑。
+ * 亮度 / 尺寸 / 片元核与 NASA Eyes StarfieldComponent 一致：
+ * brightness = 2·ln(1 + flux(absMag, d)·1e4)，绝大多数星是 5px 针尖。
  *
  * 星表：`assets/eyes-stars/stars.0.dat` … `stars.5.dat` + `galaxies.0.dat`
- * 二进制布局见 `assets/eyes-stars/README.md`（与 NASA Eyes / SolarViewer 一致）。
+ * 二进制布局见 `assets/eyes-stars/README.md`。
  */
 
 const DEFAULT_ASSETS = {
@@ -32,9 +30,23 @@ const ECLIPTIC_TO_J2000 = Object.freeze({
 });
 
 const RECORD_BYTES = 23;
-/** 渲染球半径（米）：保留星表方向，避免超大坐标精度问题 */
-const RENDER_RADIUS_M = 1.0e11;
-const PC_IN_METERS = 3.085677581491367e16;
+/** 渲染球半径（米）：日心/拉远视角仍落在 far 内 */
+const STAR_SPHERE_RADIUS = 5e14;
+
+const EYES_LUMINOSITY_AT_ABS_MAG_0 = 3.0128e28;
+const EYES_SPRITE_MIN_PX = 5;
+const EYES_SPRITE_MAX_PX = 50;
+const EYES_ALPHA_MIN = 0.05;
+const EYES_ALPHA_MAX = 1;
+const EYES_SPRITE_KERNEL_POWER = 5;
+const STAR_SPRITE_TEXTURE_SIZE = 64;
+const STAR_SPRITE_IMAGE_ID = "eyes-star-sprite";
+const RESIZE_REBUILD_RATIO = 0.05;
+
+export const DEFAULT_STAR_APPEARANCE = Object.freeze({
+  sizeScale: 1,
+  alphaScale: 1,
+});
 
 /**
  * @param {ArrayBuffer|Uint8Array} buffer
@@ -118,44 +130,96 @@ function rotateByQuaternion(x, y, z, q) {
   ];
 }
 
-/** 由 absMag 与真实距离推出近似视亮度，再映射到 Billboard scale */
-export function scaleFromAbsMagAndDistance(absMag, distanceM, isGalaxy = false) {
-  const distPc = Math.max(distanceM / PC_IN_METERS, 1e-6);
-  // 视星等：m = M + 5 log10(d_pc) - 5
-  const appMag = absMag + 5 * Math.log10(distPc) - 5;
-  if (isGalaxy) {
-    return Math.max(1.2, Math.min(8, 4.5 - 0.35 * appMag));
-  }
-  return Math.max(0.25, Math.min(3.2, 1.6 - 0.2 * appMag));
+/** Eyes：particleSize = sqrt(max(w,h) * dpr) / 60 */
+export function eyesParticleSize(width, height, devicePixelRatio = 1) {
+  const longest = Math.max(width || 0, height || 0);
+  if (!(longest > 0)) return 1;
+  return Math.sqrt(longest * (devicePixelRatio || 1)) / 60;
 }
 
-/** 生成柔和圆形星点纹理（canvas data URL） */
-export function createStarImage(size = 32, soft = false) {
+/** Eyes：brightness = 2 * ln(1 + flux(absMag, d) * 1e4) */
+export function eyesStarBrightness(absMag, distanceMeters) {
+  if (!(distanceMeters > 0) || !Number.isFinite(absMag)) return 0;
+  const luminosity =
+    EYES_LUMINOSITY_AT_ABS_MAG_0 * Math.pow(10, absMag / -2.5);
+  const flux = luminosity / (4 * Math.PI * distanceMeters * distanceMeters);
+  return 2 * Math.log(1 + flux * 1e4);
+}
+
+export function eyesStarAlpha(brightness, particleSize) {
+  const a = brightness * particleSize;
+  if (!Number.isFinite(a)) return EYES_ALPHA_MIN;
+  return Math.min(EYES_ALPHA_MAX, Math.max(EYES_ALPHA_MIN, a));
+}
+
+export function eyesStarSpriteSize(brightness, particleSize) {
+  const size = brightness * 4 * particleSize;
+  if (!Number.isFinite(size)) return EYES_SPRITE_MIN_PX;
+  return Math.min(EYES_SPRITE_MAX_PX, Math.max(EYES_SPRITE_MIN_PX, size));
+}
+
+/** Eyes 片元核：a = clamp(1 - 2r, 0, 1)^5 */
+export function eyesSpriteKernel(r) {
+  const edge = Math.min(1, Math.max(0, 1 - 2 * r));
+  return Math.pow(edge, EYES_SPRITE_KERNEL_POWER);
+}
+
+export function billboardSizeFromEyes(
+  brightness,
+  particleSize,
+  pixelRatio,
+  appearance
+) {
+  const devicePx = eyesStarSpriteSize(brightness, particleSize);
+  const scale = appearance?.sizeScale ?? 1;
+  return (devicePx / (pixelRatio || 1)) * scale;
+}
+
+export function billboardAlphaFromEyes(brightness, particleSize, appearance) {
+  const a =
+    eyesStarAlpha(brightness, particleSize) * (appearance?.alphaScale ?? 1);
+  return Math.min(1, Math.max(0, a));
+}
+
+/** 由 absMag 与真实距离推出 Billboard 像素尺度（Eyes 公式，dpr=1） */
+export function scaleFromAbsMagAndDistance(absMag, distanceM, isGalaxy = false) {
+  const brightness = eyesStarBrightness(absMag, distanceM);
+  const size = eyesStarSpriteSize(brightness, eyesParticleSize(1400, 900, 1));
+  return isGalaxy ? Math.max(size, EYES_SPRITE_MIN_PX) : size;
+}
+
+/** 生成 Eyes 同款星点精灵（白色 RGB，alpha 按核函数衰减） */
+export function createEyesStarSprite(size = STAR_SPRITE_TEXTURE_SIZE) {
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d");
-  const c = size / 2;
-  const g = ctx.createRadialGradient(c, c, 0, c, c, c);
-  if (soft) {
-    g.addColorStop(0, "rgba(255,255,255,0.95)");
-    g.addColorStop(0.25, "rgba(200,220,255,0.45)");
-    g.addColorStop(0.6, "rgba(120,160,255,0.12)");
-    g.addColorStop(1, "rgba(0,0,0,0)");
-  } else {
-    g.addColorStop(0, "rgba(255,255,255,1)");
-    g.addColorStop(0.35, "rgba(255,255,255,0.85)");
-    g.addColorStop(0.7, "rgba(255,255,255,0.25)");
-    g.addColorStop(1, "rgba(255,255,255,0)");
+  const imageData = ctx.createImageData(size, size);
+  const data = imageData.data;
+  const center = (size - 1) / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const r = Math.hypot(x - center, y - center) / size;
+      const a = eyesSpriteKernel(r);
+      const i = (y * size + x) * 4;
+      data[i] = 255;
+      data[i + 1] = 255;
+      data[i + 2] = 255;
+      data[i + 3] = Math.round(a * 255);
+    }
   }
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  return canvas.toDataURL("image/png");
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+/** @deprecated 保留旧名；实际返回 Eyes 核精灵的 data URL */
+export function createStarImage(size = 32, _soft = false) {
+  return createEyesStarSprite(size).toDataURL("image/png");
 }
 
 function toRenderPosition(x, y, z) {
   const len = Math.hypot(x, y, z) || 1;
-  const s = RENDER_RADIUS_M / len;
+  const s = STAR_SPHERE_RADIUS / len;
   return [x * s, y * s, z * s];
 }
 
@@ -167,6 +231,44 @@ async function fetchDat(url) {
   return res.arrayBuffer();
 }
 
+function currentParticleSize(viewer) {
+  const canvas = viewer?.scene?.canvas;
+  const dpr =
+    (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+  return eyesParticleSize(canvas?.clientWidth, canvas?.clientHeight, dpr);
+}
+
+function currentPixelRatio(viewer) {
+  const ratio = viewer?.scene?.pixelRatio;
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+}
+
+function ensureFarCoversStarSphere(viewer) {
+  const frustum = viewer.camera?.frustum;
+  if (frustum && typeof frustum.far === "number") {
+    frustum.far = Math.max(frustum.far, STAR_SPHERE_RADIUS * 2, 2e15);
+  }
+}
+
+function applyParticleSize(collection, brightnessList, particleSize, pixelRatio, appearance) {
+  const n = Math.min(collection.length, brightnessList.length);
+  for (let i = 0; i < n; i++) {
+    const billboard = collection.get(i);
+    const size = billboardSizeFromEyes(
+      brightnessList[i],
+      particleSize,
+      pixelRatio,
+      appearance
+    );
+    billboard.width = size;
+    billboard.height = size;
+    billboard.color = Cesium.Color.fromAlpha(
+      billboard.color,
+      billboardAlphaFromEyes(brightnessList[i], particleSize, appearance)
+    );
+  }
+}
+
 /**
  * 每帧将 BillboardCollection.modelMatrix 设为 ICRF→Fixed，
  * 使星表坐标（惯性系）在地球自转时仍相对惯性空间固定。
@@ -175,6 +277,7 @@ function bindInertialLock(viewer, collection) {
   const scratch = new Cesium.Matrix3();
   const scratch4 = new Cesium.Matrix4();
   return viewer.scene.preRender.addEventListener(() => {
+    ensureFarCoversStarSphere(viewer);
     const time = viewer.clock.currentTime;
     const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(time, scratch);
     if (!Cesium.defined(icrfToFixed)) {
@@ -196,6 +299,40 @@ function bindInertialLock(viewer, collection) {
   });
 }
 
+function addCatalogItems(collection, items, spriteImage, particleSize, pixelRatio, appearance, brightnessList) {
+  let count = 0;
+  for (const item of items) {
+    const [rx, ry, rz] = toRenderPosition(
+      item.position[0],
+      item.position[1],
+      item.position[2]
+    );
+    const brightness = eyesStarBrightness(item.absMag, item.distance);
+    const size = billboardSizeFromEyes(
+      brightness,
+      particleSize,
+      pixelRatio,
+      appearance
+    );
+    const alpha = billboardAlphaFromEyes(brightness, particleSize, appearance);
+    const [r, g, b] = item.color;
+    collection.add({
+      position: new Cesium.Cartesian3(rx, ry, rz),
+      image: spriteImage,
+      imageId: STAR_SPRITE_IMAGE_ID,
+      color: new Cesium.Color(r, g, b, alpha),
+      width: size,
+      height: size,
+      sizeInMeters: false,
+      horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+      verticalOrigin: Cesium.VerticalOrigin.CENTER,
+    });
+    brightnessList.push(brightness);
+    count++;
+  }
+  return count;
+}
+
 /**
  * @param {Cesium.Viewer} viewer
  * @param {object} [options]
@@ -203,80 +340,99 @@ function bindInertialLock(viewer, collection) {
  * @param {string[]} [options.galaxyUrls]
  * @param {boolean} [options.inertialLock=true]
  * @param {number} [options.maxStars] 可选上限，便于弱设备调试
+ * @param {{sizeScale?:number, alphaScale?:number}} [options.appearance]
  */
 export async function createStarfield(viewer, options = {}) {
   const starUrls = options.starUrls || DEFAULT_ASSETS.stars;
   const galaxyUrls = options.galaxyUrls || DEFAULT_ASSETS.galaxies;
   const inertialLock = options.inertialLock !== false;
   const maxStars = options.maxStars;
+  const appearance = { ...DEFAULT_STAR_APPEARANCE, ...(options.appearance || {}) };
 
-  const starImage = createStarImage(32, false);
-  const galaxyImage = createStarImage(64, true);
+  const spriteImage = createEyesStarSprite();
+  const particleSize = currentParticleSize(viewer);
+  const pixelRatio = currentPixelRatio(viewer);
 
   const stars = viewer.scene.primitives.add(
-    new Cesium.BillboardCollection({ scene: viewer.scene })
+    new Cesium.BillboardCollection({
+      scene: viewer.scene,
+      blendOption: Cesium.BlendOption.TRANSLUCENT,
+    })
   );
   const galaxies = viewer.scene.primitives.add(
-    new Cesium.BillboardCollection({ scene: viewer.scene })
+    new Cesium.BillboardCollection({
+      scene: viewer.scene,
+      blendOption: Cesium.BlendOption.TRANSLUCENT,
+    })
   );
 
   let starCount = 0;
   let galaxyCount = 0;
   const shardCounts = [];
+  const starBrightness = [];
+  const galaxyBrightness = [];
 
   for (const url of starUrls) {
     const parsed = parseEyesDat(await fetchDat(url));
     shardCounts.push({ url, count: parsed.count });
     let items = parsed.items;
     if (typeof maxStars === "number") {
-      const remain = Math.max(0, maxStars - starCount);
-      items = items.slice(0, remain);
+      items = items.slice(0, Math.max(0, maxStars - starCount));
     }
-    for (const item of items) {
-      const [rx, ry, rz] = toRenderPosition(
-        item.position[0],
-        item.position[1],
-        item.position[2]
-      );
-      const [r, g, b] = item.color;
-      stars.add({
-        position: new Cesium.Cartesian3(rx, ry, rz),
-        image: starImage,
-        color: new Cesium.Color(r, g, b, 1),
-        scale: scaleFromAbsMagAndDistance(item.absMag, item.distance, false),
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-        verticalOrigin: Cesium.VerticalOrigin.CENTER,
-      });
-      starCount++;
-    }
+    starCount += addCatalogItems(
+      stars,
+      items,
+      spriteImage,
+      particleSize,
+      pixelRatio,
+      appearance,
+      starBrightness
+    );
     if (typeof maxStars === "number" && starCount >= maxStars) break;
   }
 
   for (const url of galaxyUrls) {
     try {
       const parsed = parseEyesDat(await fetchDat(url));
-      for (const item of parsed.items) {
-        const [rx, ry, rz] = toRenderPosition(
-          item.position[0],
-          item.position[1],
-          item.position[2]
-        );
-        const [r, g, b] = item.color;
-        galaxies.add({
-          position: new Cesium.Cartesian3(rx, ry, rz),
-          image: galaxyImage,
-          color: new Cesium.Color(r, g, b, 0.85),
-          scale: scaleFromAbsMagAndDistance(item.absMag, item.distance, true),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-        });
-        galaxyCount++;
-      }
+      galaxyCount += addCatalogItems(
+        galaxies,
+        parsed.items,
+        spriteImage,
+        particleSize,
+        pixelRatio,
+        appearance,
+        galaxyBrightness
+      );
     } catch (err) {
       console.warn("[starfield] 跳过星系表", url, err);
     }
+  }
+
+  try {
+    viewer.scene.logarithmicDepthBuffer = true;
+  } catch (_) {
+    /* ignore */
+  }
+  ensureFarCoversStarSphere(viewer);
+
+  let appliedParticleSize = particleSize;
+  let resizeTimer = null;
+  const onResize = () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const next = currentParticleSize(viewer);
+      if (!(appliedParticleSize > 0)) return;
+      const ratio = Math.abs(next - appliedParticleSize) / appliedParticleSize;
+      if (ratio < RESIZE_REBUILD_RATIO) return;
+      const pr = currentPixelRatio(viewer);
+      applyParticleSize(stars, starBrightness, next, pr, appearance);
+      applyParticleSize(galaxies, galaxyBrightness, next, pr, appearance);
+      appliedParticleSize = next;
+      viewer.scene?.requestRender?.();
+    }, 200);
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("resize", onResize);
   }
 
   let removeLock = () => {};
@@ -310,13 +466,35 @@ export async function createStarfield(viewer, options = {}) {
   return {
     stars,
     galaxies,
-    stats: { starCount, galaxyCount, shardCounts, renderRadius: RENDER_RADIUS_M },
+    stats: {
+      starCount,
+      galaxyCount,
+      shardCounts,
+      renderRadius: STAR_SPHERE_RADIUS,
+    },
     destroy() {
       removeLock();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("resize", onResize);
+      }
+      if (resizeTimer) clearTimeout(resizeTimer);
       viewer.scene.primitives.remove(stars);
       viewer.scene.primitives.remove(galaxies);
     },
   };
 }
 
-export default { parseEyesDat, createStarImage, createStarfield, scaleFromAbsMagAndDistance };
+export default {
+  parseEyesDat,
+  createStarImage,
+  createEyesStarSprite,
+  createStarfield,
+  scaleFromAbsMagAndDistance,
+  eyesParticleSize,
+  eyesStarBrightness,
+  eyesStarAlpha,
+  eyesStarSpriteSize,
+  eyesSpriteKernel,
+  billboardSizeFromEyes,
+  billboardAlphaFromEyes,
+};

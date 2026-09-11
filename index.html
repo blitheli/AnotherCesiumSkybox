@@ -44,6 +44,9 @@
       #status.error {
         color: #ffb4b4;
       }
+      .cesium-performanceDisplay-defaultContainer {
+        right: 8px;
+      }
     </style>
   </head>
   <body>
@@ -57,37 +60,73 @@
     <script type="module">
       import { createStarfield } from "./js/starfield.js";
 
-      // 本演示不依赖 Cesium Ion token（无默认影像 / 无地形）
-      const viewer = new Cesium.Viewer("cesiumContainer", {
-        animation: false,
-        timeline: false,
-        baseLayerPicker: false,
-        geocoder: false,
-        homeButton: true,
-        sceneModePicker: false,
-        navigationHelpButton: false,
-        fullscreenButton: true,
-        infoBox: false,
-        selectionIndicator: false,
-        // 新版 Cesium：关闭默认底图，避免强制 Ion
-        baseLayer: false,
+      // 地球用 Cesium 自带 NaturalEarthII 静态影像（无需 Ion token）
+      const viewer = new Cesium.Viewer("cesiumContainer",{ 
+        baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+          Cesium.TileMapServiceImageryProvider.fromUrl(
+            Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII")
+          )
+        ),
         skyBox: false,
-        skyAtmosphere: false,
         orderIndependentTranslucency: true,
+        useBrowserRecommendedResolution: false,
       });
 
       viewer.scene.backgroundColor = Cesium.Color.BLACK;
-      viewer.scene.globe.enableLighting = false;
-      viewer.scene.globe.baseColor = new Cesium.Color(0.02, 0.05, 0.12, 1);
-      viewer.scene.globe.showGroundAtmosphere = false;
-      viewer.scene.moon = undefined;
-      viewer.scene.sun = undefined;
-      viewer.scene.fog.enabled = false;
-
+      viewer.resolutionScale = 1;
+      if (typeof viewer.scene.msaaSamples === "number") {
+        viewer.scene.msaaSamples = 4;
+      }
+      
       // 拉远一点，方便看到星空包围地球
       viewer.camera.setView({
-        destination: Cesium.Cartesian3.fromDegrees(110, 20, 2.2e7),
+        destination: Cesium.Cartesian3.fromDegrees(110, 20, 6.2e7),
       });
+      // 地球自转视角：相机锁在 ICRF，时钟推进后地球在转、星空相对惯性固定
+      const icrfScratch3 = new Cesium.Matrix3();
+      const icrfScratch4 = new Cesium.Matrix4();
+      const icrfOffset = new Cesium.Cartesian3();
+      viewer.scene.postUpdate.addEventListener((scene, time) => {
+        if (scene.mode !== Cesium.SceneMode.SCENE3D) return;
+        const icrfToFixed =
+          Cesium.Transforms.computeIcrfToFixedMatrix(time, icrfScratch3) ||
+          Cesium.Transforms.computeTemeToPseudoFixedMatrix(time, icrfScratch3);
+        if (!Cesium.defined(icrfToFixed)) return;
+        viewer.camera.lookAtTransform(
+          Cesium.Matrix4.fromRotationTranslation(
+            icrfToFixed,
+            Cesium.Cartesian3.ZERO,
+            icrfScratch4
+          ),
+          Cesium.Cartesian3.clone(viewer.camera.position, icrfOffset)
+        );
+      });
+
+
+      viewer.clock.shouldAnimate = true;
+      viewer.clock.multiplier = 3600;
+
+      viewer.scene.debugShowFramesPerSecond = true;
+      const placeFps = () => {
+        const toolbar = viewer.container.querySelector(".cesium-viewer-toolbar");
+        const fpsBox = viewer.container.querySelector(
+          ".cesium-performanceDisplay-defaultContainer"
+        );
+        if (!toolbar || !fpsBox) return;
+        const host = viewer.container.getBoundingClientRect();
+        let bottom = toolbar.getBoundingClientRect().bottom;
+        for (const el of toolbar.querySelectorAll(":scope > *")) {
+          if (/dropDown/i.test(el.className)) continue;
+          const r = el.getBoundingClientRect();
+          if (r.height > 0 && r.height < 80) bottom = Math.max(bottom, r.bottom);
+        }
+        fpsBox.style.top = `${bottom - host.top + 8}px`;
+        fpsBox.style.right = `${host.right - toolbar.getBoundingClientRect().right}px`;
+      };
+      placeFps();
+      requestAnimationFrame(placeFps);
+      const toolbar = viewer.container.querySelector(".cesium-viewer-toolbar");
+      if (toolbar) new ResizeObserver(placeFps).observe(toolbar);
 
       const statusEl = document.getElementById("status");
 
@@ -96,7 +135,7 @@
           inertialLock: true,
         });
         statusEl.textContent =
-          `已加载恒星 ${stats.starCount} · 星系 ${stats.galaxyCount}（ICRF→Fixed 锁定）`;
+          `已加载恒星 ${stats.starCount} · 星系 ${stats.galaxyCount}（地球自转视角）`;
       } catch (err) {
         console.error(err);
         statusEl.classList.add("error");
