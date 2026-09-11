@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AnotherCesiumSkybox — BillboardCollection 星空</title>
+    <!-- 固定近期 Cesium 版本（CDN，无需 npm） -->
+    <link
+      rel="stylesheet"
+      href="https://cesium.com/downloads/cesiumjs/releases/1.145/Build/Cesium/Widgets/widgets.css"
+    />
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.145/Build/Cesium/Cesium.js"></script>
+    <style>
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #000;
+      }
+      #hud {
+        position: absolute;
+        left: 12px;
+        top: 12px;
+        z-index: 10;
+        color: #e8eef7;
+        font: 13px/1.45 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: rgba(0, 8, 20, 0.55);
+        padding: 10px 12px;
+        border: 1px solid rgba(160, 190, 230, 0.25);
+        max-width: min(360px, calc(100vw - 24px));
+        pointer-events: none;
+      }
+      #hud strong {
+        color: #9fd0ff;
+      }
+      #status {
+        margin-top: 6px;
+        opacity: 0.9;
+      }
+      #status.error {
+        color: #ffb4b4;
+      }
+      .cesium-performanceDisplay-defaultContainer {
+        right: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <div id="hud">
+      <div><strong>AnotherCesiumSkybox</strong></div>
+      <div>用 BillboardCollection 替换默认 SkyBox 星空</div>
+      <div id="status">正在加载星表…</div>
+    </div>
+
+    <script type="module">
+      import { createStarfield } from "./js/starfield.js";
+
+      // 地球用 Cesium 自带 NaturalEarthII 静态影像（无需 Ion token）
+      const viewer = new Cesium.Viewer("cesiumContainer",{ 
+        baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+          Cesium.TileMapServiceImageryProvider.fromUrl(
+            Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII")
+          )
+        ),
+        skyBox: false,
+        orderIndependentTranslucency: true,
+        useBrowserRecommendedResolution: false,
+      });
+
+      viewer.scene.backgroundColor = Cesium.Color.BLACK;
+      viewer.resolutionScale = 1;
+      if (typeof viewer.scene.msaaSamples === "number") {
+        viewer.scene.msaaSamples = 4;
+      }
+      
+      // 拉远一点，方便看到星空包围地球
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(110, 20, 6.2e7),
+      });
+      // 地球自转视角：相机锁在 ICRF，时钟推进后地球在转、星空相对惯性固定
+      const icrfScratch3 = new Cesium.Matrix3();
+      const icrfScratch4 = new Cesium.Matrix4();
+      const icrfOffset = new Cesium.Cartesian3();
+      viewer.scene.postUpdate.addEventListener((scene, time) => {
+        if (scene.mode !== Cesium.SceneMode.SCENE3D) return;
+        const icrfToFixed =
+          Cesium.Transforms.computeIcrfToFixedMatrix(time, icrfScratch3) ||
+          Cesium.Transforms.computeTemeToPseudoFixedMatrix(time, icrfScratch3);
+        if (!Cesium.defined(icrfToFixed)) return;
+        viewer.camera.lookAtTransform(
+          Cesium.Matrix4.fromRotationTranslation(
+            icrfToFixed,
+            Cesium.Cartesian3.ZERO,
+            icrfScratch4
+          ),
+          Cesium.Cartesian3.clone(viewer.camera.position, icrfOffset)
+        );
+      });
+
+
+      viewer.clock.shouldAnimate = true;
+      viewer.clock.multiplier = 3600;
+
+      viewer.scene.debugShowFramesPerSecond = true;
+      const placeFps = () => {
+        const toolbar = viewer.container.querySelector(".cesium-viewer-toolbar");
+        const fpsBox = viewer.container.querySelector(
+          ".cesium-performanceDisplay-defaultContainer"
+        );
+        if (!toolbar || !fpsBox) return;
+        const host = viewer.container.getBoundingClientRect();
+        let bottom = toolbar.getBoundingClientRect().bottom;
+        for (const el of toolbar.querySelectorAll(":scope > *")) {
+          if (/dropDown/i.test(el.className)) continue;
+          const r = el.getBoundingClientRect();
+          if (r.height > 0 && r.height < 80) bottom = Math.max(bottom, r.bottom);
+        }
+        fpsBox.style.top = `${bottom - host.top + 8}px`;
+        fpsBox.style.right = `${host.right - toolbar.getBoundingClientRect().right}px`;
+      };
+      placeFps();
+      requestAnimationFrame(placeFps);
+      const toolbar = viewer.container.querySelector(".cesium-viewer-toolbar");
+      if (toolbar) new ResizeObserver(placeFps).observe(toolbar);
+
+      const statusEl = document.getElementById("status");
+
+      try {
+        const { stats } = await createStarfield(viewer, {
+          inertialLock: true,
+        });
+        statusEl.textContent =
+          `已加载恒星 ${stats.starCount} · 星系 ${stats.galaxyCount}（地球自转视角）`;
+      } catch (err) {
+        console.error(err);
+        statusEl.classList.add("error");
+        statusEl.textContent =
+          "加载失败：请用本地 HTTP 服务打开本页（不能直接 file://）。详见 README。";
+      }
+    </script>
+  </body>
+</html>
