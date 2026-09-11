@@ -1,40 +1,33 @@
-# eyes-stars 星表资产
+# NASA Eyes 星表二进制（vendored）
 
-本目录存放 NASA Eyes 风格星空演示所用的二进制星表。
+本目录存放 [NASA Eyes on the Solar System](https://eyes.nasa.gov/apps/solar-system/) 静态资源中的恒星/星系点源目录，格式与 Eyes 运行时一致。
 
 ## 文件
 
-| 文件 | 说明 |
-|------|------|
-| `stars.0.dat` | 恒星分片（当前为 World Wind Hipparcos Mag≤6 子集，5044 颗） |
-| `galaxies.0.dat` | 星系/深空光斑分片（演示用稀疏采样） |
-| `README.md` | 本说明 |
+- `stars.0.dat` … `stars.5.dat`（Eyes 原始为 `.bin`，入库改为 `.dat`，避免 Windows 浏览器弹出下载）
+- `galaxies.0.dat`
 
-命名约定 `stars.*.dat` / `galaxies.*.dat` 便于按分片扩展（`stars.1.dat` …）。
+原始 URL（仅用于离线下载入库，应用运行时读本地路径）：
 
-## 二进制格式（little-endian）
+`https://eyes.nasa.gov/assets/static/stars/<filename>`
 
-与 NASA World Wind `Hipparcos_Stars_Mag*.dat` 兼容：
+下载时需带 Referer `https://eyes.nasa.gov/apps/solar-system/`。
 
-1. `float32` — 星球半径（米）
-2. 重复 N 次，每次 6 × `float32`：
-   - `r, g, b` — 颜色，范围约 0–1
-   - `x, y, z` — 笛卡尔位置（米），以原点（地球质心）为球心
+## 二进制布局（小端）
 
-解析见仓库根目录 `js/starfield.js` 中的 `parseEyesDat`。
+每文件：
 
-## 与 ASTROX.SolarViewer 的关系
+1. `int32 count`
+2. 重复 `count` 次，每条 23 字节：
+   - `float32 mag`（视星等；尺寸主要用 absMag）
+   - `float32 absMag`
+   - `uint8 r, g, b`
+   - `float32 y_raw` → 位置 `y = -y_raw`
+   - `float32 z`
+   - `float32 x`
 
-目标是从私有/兄弟仓库 `blitheli/ASTROX.SolarViewer` 的 `assets/eyes-stars/` **原样拷贝**真实 Eyes 导出星表。  
-当前 Cloud Agent 的 GitHub token **无法读取该私有仓**，因此先放入兼容格式的公开 Hipparcos 数据，保证 CDN 演示可跑。
+加载后应用 ecliptic→J2000 四元数 `(w,x,y,z)=(0.9791532214288992, 0.2031230389823101, 0, 0)`，颜色按 `max(rgb)` 归一。
 
-当你能访问 SolarViewer 后：
+分片按视星等划分：`stars.0` 为 mag ≤ 6.0，之后依次到 mag ≈ 8.03；缺可靠视差的星距离钉在 3.09e20 m（10 kpc）。
 
-1. 用其 `assets/eyes-stars/` 覆盖本目录；
-2. 若二进制布局不同，只需调整 `parseEyesDat`（并更新本 README 与 `skybox原理.md`）；
-3. 跑 `node test/starfieldParseTest.js` 做解析冒烟。
-
-## 许可提示
-
-`stars.0.dat` 内容源自 NASA World Wind 附带的 Hipparcos 子集（Apache-2.0 分发的工程资产）。  
-若替换为 NASA Eyes 安装包内提取的数据，请自行确认分发许可后再公开托管。
+场景侧由 `js/starfield.js` 解析并以 Cesium `BillboardCollection` 绘制，亮度/尺寸/片元核公式与 Eyes `StarfieldComponent` 着色器一致（亮度由 `absMag` 与星表真实距离推出，因此距离字段不可丢）；日心场景用中心天体 `Inertial2Fixed` 每帧锁定到惯性系。完整原理见仓库根目录 `skybox原理.md`。
