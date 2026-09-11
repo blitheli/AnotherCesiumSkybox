@@ -30,9 +30,9 @@
 ```
 index.html              # CDN Cesium 入口，关闭默认 SkyBox
 js/starfield.js         # BillboardCollection 星空 + ICRF→Fixed 锁定
-assets/eyes-stars/      # stars.*.dat / galaxies.*.dat
+assets/eyes-stars/      # stars.0–5.dat / galaxies.0.dat（SolarViewer / NASA Eyes）
 skybox原理.md           # 中文原理
-serve.bat / serve.sh    # 本地静态服务
+serve.bat / serve.sh    # 本地静态服务（可选）
 test/starfieldParseTest.js
 AGENTS.md
 ```
@@ -40,7 +40,7 @@ AGENTS.md
 ## 实现要点
 
 - **渲染：** `Cesium.BillboardCollection`（非默认 `SkyBox`，亦非 `PointPrimitive`）。
-- **数据：** `assets/eyes-stars/*.dat`（当前为 World Wind Hipparcos 兼容二进制；见该目录 README）。
+- **数据：** `assets/eyes-stars/stars.0.dat` … `stars.5.dat` 与 `galaxies.0.dat`（自 ASTROX.SolarViewer 同步的 NASA Eyes 星表；布局见该目录 README）。
 - **惯性锁：** 每帧 `computeIcrfToFixedMatrix` 写入 collection 的 `modelMatrix`。
 - **无 Ion：** `baseLayer: false`，仅显示着色地球椭球 + 星空。
 
@@ -50,8 +50,8 @@ AGENTS.md
 
 ## 来源说明
 
-目标从 [`ASTROX.SolarViewer`](https://github.com/blitheli/ASTROX.SolarViewer) 移植 `skybox原理.md`、`js/starfield.js`、`assets/eyes-stars/` 等。若构建环境无法读取该私有仓，本仓库会先用兼容公开星表保证可运行；拿到原资产后覆盖 `assets/eyes-stars/` 并按需调整 `parseEyesDat` 即可。
+星表与原理文档移植自 [`ASTROX.SolarViewer`](https://github.com/blitheli/ASTROX.SolarViewer) 的 `assets/eyes-stars/` 与相关 starfield 逻辑；本仓库用 BillboardCollection 做独立 CDN 演示。
 
 ## 许可
 
-演示代码以本仓库许可为准。`stars.0.dat` 当前来自 NASA World Wind 附带 Hipparcos 子集（见 `assets/eyes-stars/README.md`）。
+演示代码以本仓库许可为准。`assets/eyes-stars/` 中的二进制来自 NASA Eyes 静态资源（经 SolarViewer 入库）；公开分发时请自行确认相关许可。

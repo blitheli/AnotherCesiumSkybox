@@ -13,7 +13,7 @@
 ## 关键文件
 
 - `js/starfield.js` — 解析 `.dat`、Billboard、ICRF→Fixed
-- `assets/eyes-stars/` — 星表；格式见该目录 README
+- `assets/eyes-stars/` — NASA Eyes 星表（`stars.0–5.dat` + `galaxies.0.dat`）；格式见该目录 README；`starfield.js` 必须加载全部恒星分片
 - `index.html` — CDN Cesium 钉扎版本号
 - `skybox原理.md` — 中文原理（保持中文）
 
