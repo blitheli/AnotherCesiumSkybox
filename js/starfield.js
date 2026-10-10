@@ -299,6 +299,30 @@ function bindInertialLock(viewer, collection) {
   });
 }
 
+/**
+ * 关闭或隐藏模糊 SkyBox，保持深空黑底。
+ * 只隐藏 skyBox，不关闭天空大气和地面大气，也不改 backgroundColor。
+ * @param {Cesium.Viewer} viewer
+ */
+export function dimOrDisableSkyBox(viewer) {
+  if (!viewer?.scene) return;
+  try {
+    if (viewer.scene.skyBox) {
+      viewer.scene.skyBox.show = false;
+    }
+    if (viewer.scene.skyAtmosphere) {
+      // viewer.scene.skyAtmosphere.show = false;
+    }
+    if (viewer.scene.globe) {
+      // viewer.scene.globe.showGroundAtmosphere = false;
+    }
+    // viewer.scene.backgroundColor = Cesium.Color.BLACK;
+    viewer.scene.requestRender?.();
+  } catch (error) {
+    console.warn("[starfield] 关闭 SkyBox 失败：", error);
+  }
+}
+
 function addCatalogItems(collection, items, spriteImage, particleSize, pixelRatio, appearance, brightnessList) {
   let count = 0;
   for (const item of items) {
@@ -488,6 +512,7 @@ export default {
   parseEyesDat,
   createStarImage,
   createEyesStarSprite,
+  dimOrDisableSkyBox,
   createStarfield,
   scaleFromAbsMagAndDistance,
   eyesParticleSize,

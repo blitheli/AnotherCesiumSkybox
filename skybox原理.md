@@ -12,13 +12,12 @@ Cesium 默认 `Scene.skyBox` 是一张**立方体贴图**（六张图：±X ±Y 
 - 星点是贴图像素，**不是**星表里的逐颗天体；
 - 难以按星等缩放、按光谱着色，也难与真实赤经赤纬星表对齐。
 
-本演示在 `index.html` 里关闭默认天空：
+本演示在 `index.html` 里只隐藏默认 SkyBox 立方体贴图（`dimOrDisableSkyBox`）。天空大气、地面大气保持 Viewer 默认开启，也不改 `backgroundColor`：
 
 ```js
-skyBox: false,
-skyAtmosphere: false,
-// …
-viewer.scene.backgroundColor = Cesium.Color.BLACK;
+if (viewer.scene.skyBox) {
+  viewer.scene.skyBox.show = false;
+}
 ```
 
 ## 2. 为什么改用 BillboardCollection？
