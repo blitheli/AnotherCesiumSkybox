@@ -18,6 +18,7 @@ const {
   eyesSpriteKernel,
   billboardSizeFromEyes,
   billboardAlphaFromEyes,
+  dimOrDisableSkyBox,
 } = await import(pathToFileURL(path.join(root, "js/starfield.js")).href);
 
 const STAR_SHARDS = [
@@ -140,6 +141,25 @@ assert(
   `alpha 中位数应在 0.1–0.6（暗弱为主），实际 ${medianAlpha}`
 );
 assert(alphas[alphas.length - 1] === 1, "应存在 alpha 达到 1 的亮星");
+
+const scene = {
+  skyBox: { show: true },
+  skyAtmosphere: { show: true },
+  globe: { showGroundAtmosphere: true },
+  backgroundColor: "UNCHANGED",
+  renderCalls: 0,
+  requestRender() {
+    this.renderCalls += 1;
+  },
+};
+dimOrDisableSkyBox({ scene });
+assert(scene.skyBox.show === false, "应只隐藏 skyBox");
+assert(scene.skyAtmosphere.show === true, "不应关闭 skyAtmosphere");
+assert(scene.globe.showGroundAtmosphere === true, "不应关闭地面大气");
+assert(scene.backgroundColor === "UNCHANGED", "不应改写 backgroundColor");
+assert(scene.renderCalls === 1, "隐藏 SkyBox 后应请求重绘");
+dimOrDisableSkyBox(undefined);
+dimOrDisableSkyBox({});
 
 console.log("starfieldParseTest: Eyes 亮度/尺度映射通过", {
   total: all.length,

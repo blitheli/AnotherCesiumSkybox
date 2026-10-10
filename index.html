@@ -58,21 +58,22 @@
     </div>
 
     <script type="module">
-      import { createStarfield } from "./js/starfield.js";
+      import { createStarfield, dimOrDisableSkyBox } from "./js/starfield.js";
 
       // 地球用 Cesium 自带 NaturalEarthII 静态影像（无需 Ion token）
+      // 不传 skyBox: false：该选项会连 Sun / Moon 一起不创建。
+      // 大气保持 Viewer 默认开启，背景色也不覆盖。
       const viewer = new Cesium.Viewer("cesiumContainer",{ 
         baseLayer: Cesium.ImageryLayer.fromProviderAsync(
           Cesium.TileMapServiceImageryProvider.fromUrl(
             Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII")
           )
         ),
-        skyBox: false,
         orderIndependentTranslucency: true,
         useBrowserRecommendedResolution: false,
       });
 
-      viewer.scene.backgroundColor = Cesium.Color.BLACK;
+      dimOrDisableSkyBox(viewer);
       viewer.resolutionScale = 1;
       if (typeof viewer.scene.msaaSamples === "number") {
         viewer.scene.msaaSamples = 4;
